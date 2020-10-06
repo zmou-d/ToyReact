@@ -4,6 +4,9 @@
  * @param {*} attributes 标签上的属性集合 (对象)
  * @param  {...any} children 从第三个参数之后的所有参数都是子节点
  */
+
+const RENDER_TO_DOM = Symbol('private function(renderToDOM)')
+
 export function createElement(type, attributes, ...children) {
   let elem
   if (typeof type === "string") {
@@ -11,7 +14,8 @@ export function createElement(type, attributes, ...children) {
     elem = new ElementWrapper(type)
   } else {
     // 创建子组件
-    elem = new type
+    // * 传入 props, 简易支持 function api
+    elem = new type(attributes)
   }
   for (let attr in attributes) {
     elem.setAttribute(attr, attributes[attr])
@@ -21,8 +25,10 @@ export function createElement(type, attributes, ...children) {
       if (typeof child === "string") {
         // native tag
         elem.appendChild(new TextWrapper(child))
-        // child = new TextWrapper(child)
+      } else if (child === null) {
+        continue
       } else if (child instanceof Array) {
+        // this.children
         insertChildren(child)
       } else {
         elem.appendChild(child)
@@ -38,24 +44,34 @@ class ElementWrapper {
     this.root = document.createElement(type)
   }
   setAttribute(name, value) {
-    this.root.setAttribute(name, value)
+    if (name.match(/^on([\s\S]+)$/)) {
+      this.root.addEventListener(RegExp.$1.replace(/^[\s\S]/, c => c.toLowerCase()), value)
+    } else if (name === 'className') {
+      this.root.setAttribute('class', value)
+    } else {
+      this.root.setAttribute(name, value)
+    }
   }
   appendChild(component) {
-    this.root.appendChild(component.root)
+    let range = document.createRange()
+    range.setStart(this.root, this.root.childNodes.length)
+    range.setEnd(this.root, this.root.childNodes.length)
+    component[RENDER_TO_DOM](range)
+  }
+  [RENDER_TO_DOM](range) {
+    range.deleteContents()
+    range.insertNode(this.root)
   }
 }
 
 class TextWrapper {
   constructor(type) {
-    console.log(`creating text node: ${type}`)
     this.root = document.createTextNode(type)
   }
-  // setAttribute(name, value) {
-  //   this.root.setAttribute(name, value)
-  // }
-  // appendChild (child) {
-  //   this.root.appendChild(child)
-  // }
+  [RENDER_TO_DOM](range) {
+    range.deleteContents()
+    range.insertNode(this.root)
+  }
 }
 
 export class Component {
@@ -63,6 +79,7 @@ export class Component {
     this.props = Object.create(null)
     this.children = []
     this._root = null
+    this._range = null
   }
   setAttribute(name, value) {
     this.props[name] = value
@@ -70,14 +87,38 @@ export class Component {
   appendChild(component) {
     this.children.push(component)
   }
-  get root() {
-    if (!this._root) {
-      this._root = this.render().root
+  [RENDER_TO_DOM](range) {
+    this._range = range
+    const renderRes = this.render()
+    renderRes[RENDER_TO_DOM](range)
+  }
+  rerender() {
+    this._range.deleteContents()
+    this[RENDER_TO_DOM](this._range)
+  }
+  setState(newState) {
+    if (this.state === null || typeof this.state !== 'object') {
+      this.state = newState
+      this.rerender()
+      return
     }
-    return this._root
+    const merge = (oldState, newState) => {
+      for (let key in newState) {
+        if (oldState.key === null || typeof oldState.key !== 'object') {
+          oldState[key] = newState[key]
+        } else {
+          merge(oldState[key], newState[key])
+        }
+      }
+    }
+    merge(this.state, newState)
+    this.rerender()
   }
 }
 
 export function render(component, parentElement) {
-  parentElement.appendChild(component.root)
+  let range = document.createRange()
+  range.setStart(parentElement, 0)
+  range.setEnd(parentElement, parentElement.childNodes.length)
+  component[RENDER_TO_DOM](range)
 }
